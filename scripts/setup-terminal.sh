@@ -21,6 +21,9 @@ shell-integration-features = no-title
 font-family = JetBrains Mono
 font-size = 14
 
+# --- Theme ---
+theme = "Catppuccin Macchiato"
+
 # --- macOS behavior ---
 # Treat Option as Alt so word-jumping (Alt+B/F) and other
 # readline/zsh shortcuts work correctly.
@@ -129,6 +132,12 @@ if grep -q '^shell-integration-features = no-title$' "$GHOSTTY_DIR/config"; then
   echo "[OK] Ghostty: shell-integration-features = no-title"
 else
   echo "[FAIL] Ghostty: missing no-title setting"
+fi
+
+if grep -q '^theme = "Catppuccin Macchiato"$' "$GHOSTTY_DIR/config"; then
+  echo "[OK] Ghostty: theme = Catppuccin Macchiato"
+else
+  echo "[FAIL] Ghostty: Catppuccin Macchiato theme missing"
 fi
 
 if grep -q 'DISABLE_AUTO_TITLE="true"' "$HOME/.zshrc"; then
