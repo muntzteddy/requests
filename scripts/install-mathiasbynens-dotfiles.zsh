@@ -30,6 +30,7 @@
 
 set -uo pipefail
 
+# shellcheck disable=SC2296  # zsh-only prompt-expansion idiom for "this script's own path"; no bash equivalent
 SCRIPT_PATH="${(%):-%x}"
 
 REPO_URL="https://github.com/mathiasbynens/dotfiles.git"
@@ -44,10 +45,10 @@ DO_BREW=false
 if [[ -t 1 ]]; then
   :
 fi
-info()  { print -P "%F{blue}[INFO]%f  $*" }
-ok()    { print -P "%F{green}[OK]%f    $*" }
-warn()  { print -P "%F{yellow}[WARN]%f  $*" }
-err()   { print -P "%F{red}[ERROR]%f $*" >&2 }
+info()  { print -P "%F{blue}[INFO]%f  $*"; }
+ok()    { print -P "%F{green}[OK]%f    $*"; }
+warn()  { print -P "%F{yellow}[WARN]%f  $*"; }
+err()   { print -P "%F{red}[ERROR]%f $*" >&2; }
 
 usage() {
   sed -n '2,30p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
@@ -228,17 +229,17 @@ do_restore() {
     err "No backups found at ${BACKUP_ROOT}"
     exit 1
   fi
-  local latest
-  latest=$(ls -t "$BACKUP_ROOT" 2>/dev/null | head -1)
-  if [[ -z "$latest" ]]; then
+  local -a latest_dirs
+  latest_dirs=("${BACKUP_ROOT}"/*(/om[1]N))
+  if (( ${#latest_dirs} == 0 )); then
     err "No backup snapshots found under ${BACKUP_ROOT}"
     exit 1
   fi
-  local dir="${BACKUP_ROOT}/${latest}"
+  local dir="${latest_dirs[1]}"
   info "Restoring from ${dir}"
   local f rel
   for f in "${dir}"/**/*(N.D); do
-    rel="${f#${dir}/}"
+    rel="${f#"${dir}"/}"
     if $DRY_RUN; then
       info "[dry-run] Would restore ${rel} -> ${HOME}/${rel}"
     else
