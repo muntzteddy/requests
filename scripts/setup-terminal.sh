@@ -67,6 +67,19 @@ export PATH="$HOME/.local/bin:$PATH"
 export PATH="$GOPATH/bin:$PATH"
 
 # ============================================================
+# 2b. mathiasbynens/dotfiles shell config (if installed via
+#     scripts/install-mathiasbynens-dotfiles.zsh --apply)
+# ============================================================
+
+# Mirrors that repo's own .bash_profile loader, minus .bash_prompt
+# (bash-specific prompt formatting; we use Oh My Zsh's theme instead).
+# Placed before section 3 below so this session's explicit choices
+# (locale, editor) always win over whatever .exports sets.
+for file in "$HOME"/.{path,exports,aliases,functions,extra}; do
+  [ -r "$file" ] && [ -f "$file" ] && source "$file"
+done
+
+# ============================================================
 # 3. Environment variables
 # ============================================================
 
