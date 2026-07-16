@@ -158,7 +158,16 @@ do_apply() {
       mkdir -p "$backup_dir"
       cp -R "$dst" "${backup_dir}/${base}"
     fi
-    cp -R "$src" "$dst"
+    # When src is a directory and dst already exists as one (e.g. a
+    # pre-existing ~/bin with the user's own scripts), plain `cp -R src
+    # dst` nests src *inside* dst instead of merging into it. Merge via
+    # the trailing-/. form in that case; every other case (dst absent,
+    # or src a plain file) is already handled correctly by cp -R alone.
+    if [[ -d "$src" && -d "$dst" ]]; then
+      cp -R "$src"/. "$dst"/
+    else
+      cp -R "$src" "$dst"
+    fi
     ok "Installed ${base}"
   done
 
