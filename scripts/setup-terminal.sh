@@ -9,13 +9,63 @@ GHOSTTY_DIR="$HOME/.config/ghostty"
 mkdir -p "$GHOSTTY_DIR"
 [[ -f "$GHOSTTY_DIR/config" ]] && cp "$GHOSTTY_DIR/config" "$BACKUP_DIR/ghostty-config"
 
+# Ghostty loads both `config` and any `*.ghostty` file in this directory,
+# and for singular keys the later-loaded one wins outright rather than
+# merging -- a pre-existing config.ghostty here silently overrode our
+# shell-integration-features (no-cursor beat no-title) for this session's
+# entire duration. Fold it into this single file and neutralize it so
+# there's exactly one source of truth going forward.
+if [[ -f "$GHOSTTY_DIR/config.ghostty" ]]; then
+  cp "$GHOSTTY_DIR/config.ghostty" "$BACKUP_DIR/ghostty-config.ghostty"
+  rm -f "$GHOSTTY_DIR/config.ghostty"
+fi
+
 cat > "$GHOSTTY_DIR/config" <<'GHOSTTY_EOF'
 # Ghostty configuration — macOS Apple Silicon
+# Merged from a pre-existing personal config.ghostty (window sizing,
+# quick terminal, keybindings) plus this session's title-fix/theme work.
 
-# --- Shell integration ---
-# Disable title-setting to prevent a 3-way conflict with Oh My Zsh's
-# termsupport.zsh and Claude Code's terminal-title updates.
-shell-integration-features = no-title
+# --- Layout and window behaviour ---
+window-width = 160
+window-height = 36
+window-padding-x = 12
+window-padding-y = 8
+window-save-state = always
+window-theme = auto
+macos-titlebar-style = tabs
+macos-non-native-fullscreen = true
+# Treat Option as Alt so word-jumping (Alt+B/F) and other
+# readline/zsh shortcuts work correctly.
+macos-option-as-alt = true
+# Quit Ghostty when the last terminal window closes.
+quit-after-last-window-closed = true
+
+# --- Theme, contrast, colorspace ---
+theme = "Catppuccin Macchiato"
+minimum-contrast = 2
+window-colorspace = srgb
+background-blur-radius = 0
+
+# --- Font and rendering ---
+font-family = "JetBrainsMonoNerdFont"
+font-size = 14
+font-thicken = false
+font-thicken-strength = 1
+adjust-cell-height = 2
+
+# --- Cursor and shell integration ---
+shell-integration = detect
+# no-cursor: pre-existing preference (disables shell-integration's
+#   auto bar-cursor-on-prompt behavior).
+# no-title: layer 1 of the 3-layer title fix, prevents Ghostty's own
+#   shell-integration from setting the tab title from the running
+#   command/cwd (Oh My Zsh's title hooks and Claude Code's title
+#   updates are the other two layers, handled elsewhere).
+shell-integration-features = no-cursor,no-title
+cursor-style = block
+cursor-style-blink = false
+cursor-opacity = 0.8
+cursor-click-to-move = true
 
 # --- Fixed title ---
 # CLAUDE_CODE_DISABLE_TERMINAL_TITLE is a known-buggy, currently
@@ -27,23 +77,37 @@ shell-integration-features = no-title
 # instead of depending on Claude Code's flag actually working.
 title = "Ghostty"
 
-# --- Font ---
-font-family = JetBrains Mono
-font-size = 14
+# --- Mouse ergonomics ---
+mouse-hide-while-typing = false
 
-# --- Theme ---
-theme = "Catppuccin Macchiato"
+# --- Quick terminal ---
+quick-terminal-position = top
+quick-terminal-screen = mouse
+quick-terminal-autohide = true
+quick-terminal-animation-duration = 0
+keybind = ctrl+grave_accent=toggle_quick_terminal
 
-# --- macOS behavior ---
-# Treat Option as Alt so word-jumping (Alt+B/F) and other
-# readline/zsh shortcuts work correctly.
-macos-option-as-alt = true
+# --- Tabs and splits ---
+keybind = cmd+t=new_tab
+keybind = cmd+w=close_surface
+keybind = cmd+shift+left=previous_tab
+keybind = cmd+shift+right=next_tab
+keybind = cmd+d=new_split:right
+keybind = cmd+shift+d=new_split:down
+keybind = cmd+alt+left=goto_split:left
+keybind = cmd+alt+right=goto_split:right
+keybind = cmd+alt+up=goto_split:top
+keybind = cmd+alt+down=goto_split:bottom
+keybind = cmd+shift+e=equalize_splits
+keybind = cmd+shift+f=toggle_split_zoom
 
-# Restore all windows/tabs on relaunch.
-window-save-state = always
+# --- Font size controls ---
+keybind = cmd+plus=increase_font_size:1
+keybind = cmd+minus=decrease_font_size:1
+keybind = cmd+zero=reset_font_size
 
-# Quit Ghostty when the last terminal window closes.
-quit-after-last-window-closed = true
+# --- Config reload ---
+keybind = cmd+shift+comma=reload_config
 GHOSTTY_EOF
 echo "Ghostty config written to $GHOSTTY_DIR/config"
 
@@ -97,9 +161,12 @@ export LANG=en_AU.UTF-8
 export LC_ALL=en_AU.UTF-8
 export EDITOR=nano
 
-# Layer 2b of the title fix: settings.json's "env" key only reliably
+# Layer 3 of the title fix: settings.json's "env" key only reliably
 # reaches tool-call subprocesses, not Claude Code's own startup
-# environment, so the title override needs a real shell-level export too.
+# environment, so the title override needs a real shell-level export
+# too. (Confirmed unreliable either way in current Claude Code
+# versions -- the Ghostty `title` fixed-string override above is the
+# layer that actually holds regardless of whether this flag works.)
 export CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
 
 # ============================================================
@@ -156,10 +223,10 @@ PY_EOF
 echo ""
 echo "=== Validation ==="
 
-if grep -q '^shell-integration-features = no-title$' "$GHOSTTY_DIR/config"; then
-  echo "[OK] Ghostty: shell-integration-features = no-title"
+if grep -q 'shell-integration-features = no-cursor,no-title' "$GHOSTTY_DIR/config"; then
+  echo "[OK] Ghostty: shell-integration-features includes no-title"
 else
-  echo "[FAIL] Ghostty: missing no-title setting"
+  echo "[FAIL] Ghostty: shell-integration-features missing no-title"
 fi
 
 if grep -q '^theme = "Catppuccin Macchiato"$' "$GHOSTTY_DIR/config"; then
@@ -172,6 +239,12 @@ if grep -q '^title = "Ghostty"$' "$GHOSTTY_DIR/config"; then
   echo "[OK] Ghostty: fixed title set (works around buggy CLAUDE_CODE_DISABLE_TERMINAL_TITLE)"
 else
   echo "[FAIL] Ghostty: fixed title missing"
+fi
+
+if [[ ! -f "$GHOSTTY_DIR/config.ghostty" ]]; then
+  echo "[OK] Ghostty: no competing config.ghostty file"
+else
+  echo "[FAIL] Ghostty: config.ghostty still present, will override this config"
 fi
 
 if grep -q 'DISABLE_AUTO_TITLE="true"' "$HOME/.zshrc"; then
