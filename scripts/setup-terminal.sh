@@ -17,6 +17,16 @@ cat > "$GHOSTTY_DIR/config" <<'GHOSTTY_EOF'
 # termsupport.zsh and Claude Code's terminal-title updates.
 shell-integration-features = no-title
 
+# --- Fixed title ---
+# CLAUDE_CODE_DISABLE_TERMINAL_TITLE is a known-buggy, currently
+# unreliable flag (multiple open anthropics/claude-code issues,
+# including specifically on Ghostty/macOS) -- it does not consistently
+# stop Claude Code from setting the tab title via its own OSC escape
+# sequence. This forces the title to a fixed string regardless of
+# what any program sends, closing that gap at the terminal level
+# instead of depending on Claude Code's flag actually working.
+title = "Ghostty"
+
 # --- Font ---
 font-family = JetBrains Mono
 font-size = 14
@@ -156,6 +166,12 @@ if grep -q '^theme = "Catppuccin Macchiato"$' "$GHOSTTY_DIR/config"; then
   echo "[OK] Ghostty: theme = Catppuccin Macchiato"
 else
   echo "[FAIL] Ghostty: Catppuccin Macchiato theme missing"
+fi
+
+if grep -q '^title = "Ghostty"$' "$GHOSTTY_DIR/config"; then
+  echo "[OK] Ghostty: fixed title set (works around buggy CLAUDE_CODE_DISABLE_TERMINAL_TITLE)"
+else
+  echo "[FAIL] Ghostty: fixed title missing"
 fi
 
 if grep -q 'DISABLE_AUTO_TITLE="true"' "$HOME/.zshrc"; then
