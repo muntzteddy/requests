@@ -4,20 +4,45 @@ set -euo pipefail
 BACKUP_DIR="$HOME/.config-backups/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
-# --- Ghostty config (layer 1 of 3-layer title fix) ---
+# --- Ghostty config ---
+# Terminal title fix: Ghostty's `title = "Ghostty"` (below) is the one
+# layer confirmed to actually hold. shell-integration's no-title,
+# DISABLE_AUTO_TITLE, and CLAUDE_CODE_DISABLE_TERMINAL_TITLE (.zshrc +
+# settings.json) are kept as defense-in-depth -- they stop their own
+# mechanism from attempting a title change at all, which is harmless
+# and keeps things consistent if the Ghostty-level lock is ever
+# removed, but per Ghostty's docs none of them can have any observable
+# effect on the displayed title while the lock is in place.
 GHOSTTY_DIR="$HOME/.config/ghostty"
 mkdir -p "$GHOSTTY_DIR"
 [[ -f "$GHOSTTY_DIR/config" ]] && cp "$GHOSTTY_DIR/config" "$BACKUP_DIR/ghostty-config"
 
-# Ghostty loads both `config` and any `*.ghostty` file in this directory,
-# and for singular keys the later-loaded one wins outright rather than
-# merging -- a pre-existing config.ghostty here silently overrode our
+# Ghostty loads `config` and `config.ghostty` from this XDG directory, and
+# for singular keys the later-loaded one wins outright rather than merging
+# -- a pre-existing config.ghostty here silently overrode our
 # shell-integration-features (no-cursor beat no-title) for this session's
 # entire duration. Fold it into this single file and neutralize it so
 # there's exactly one source of truth going forward.
 if [[ -f "$GHOSTTY_DIR/config.ghostty" ]]; then
   cp "$GHOSTTY_DIR/config.ghostty" "$BACKUP_DIR/ghostty-config.ghostty"
   rm -f "$GHOSTTY_DIR/config.ghostty"
+fi
+
+# Ghostty on macOS ALSO loads config/config.ghostty from a second,
+# completely separate directory (Application Support), loaded *after* the
+# XDG path above and overriding it on conflicts -- confirmed via
+# https://ghostty.org/docs/config: "Note that all macOS-specific files are
+# loaded after all XDG files." Neutralize this too, for the same reason as
+# above: leaving it unchecked would let the exact same class of silent
+# override recur through a path this script never touched.
+MACOS_GHOSTTY_DIR="$HOME/Library/Application Support/com.mitchellh.ghostty"
+if [[ -d "$MACOS_GHOSTTY_DIR" ]]; then
+  for f in config config.ghostty; do
+    if [[ -f "$MACOS_GHOSTTY_DIR/$f" ]]; then
+      cp "$MACOS_GHOSTTY_DIR/$f" "$BACKUP_DIR/ghostty-macos-$f"
+      rm -f "$MACOS_GHOSTTY_DIR/$f"
+    fi
+  done
 fi
 
 cat > "$GHOSTTY_DIR/config" <<'GHOSTTY_EOF'
@@ -57,10 +82,10 @@ adjust-cell-height = 2
 shell-integration = detect
 # no-cursor: pre-existing preference (disables shell-integration's
 #   auto bar-cursor-on-prompt behavior).
-# no-title: layer 1 of the 3-layer title fix, prevents Ghostty's own
-#   shell-integration from setting the tab title from the running
-#   command/cwd (Oh My Zsh's title hooks and Claude Code's title
-#   updates are the other two layers, handled elsewhere).
+# no-title: defense-in-depth, prevents Ghostty's own shell-integration
+#   from attempting to set the tab title from the running command/cwd
+#   in the first place. The `title = "Ghostty"` lock below is what
+#   actually guarantees the title stays fixed either way.
 shell-integration-features = no-cursor,no-title
 cursor-style = block
 cursor-style-blink = false
@@ -68,13 +93,17 @@ cursor-opacity = 0.8
 cursor-click-to-move = true
 
 # --- Fixed title ---
-# CLAUDE_CODE_DISABLE_TERMINAL_TITLE is a known-buggy, currently
-# unreliable flag (multiple open anthropics/claude-code issues,
-# including specifically on Ghostty/macOS) -- it does not consistently
-# stop Claude Code from setting the tab title via its own OSC escape
-# sequence. This forces the title to a fixed string regardless of
-# what any program sends, closing that gap at the terminal level
-# instead of depending on Claude Code's flag actually working.
+# CLAUDE_CODE_DISABLE_TERMINAL_TITLE (see anthropics/claude-code issues
+# #16572, #21677, #29349, #3396, #4765 -- multiple open reports the flag
+# doesn't reliably stop the title change, including on Ghostty/macOS) is
+# not dependable enough to rely on alone. This forces the title to a
+# fixed string regardless of what any program sends, per Ghostty's own
+# docs (https://ghostty.org/docs/config/reference, `title` option:
+# "Ghostty will ignore any set title escape sequences programs...may
+# send"), closing the gap at the terminal level instead of depending on
+# the upstream flag actually working. This is the one layer confirmed
+# (empirically, on this machine) to actually hold regardless of whether
+# the other three below do anything.
 title = "Ghostty"
 
 # --- Mouse ergonomics ---
@@ -122,7 +151,9 @@ cat > "$HOME/.zshrc" <<'ZSHRC_EOF'
 # ============================================================
 
 # Prevent Oh My Zsh termsupport.zsh from setting terminal title.
-# Layer 2 of the 3-layer title fix (Ghostty + Claude Code + OMZ).
+# Defense-in-depth alongside the Ghostty `title` lock (see
+# scripts/setup-terminal.sh's Ghostty-config comment) -- harmless
+# either way, not independently load-bearing.
 DISABLE_AUTO_TITLE="true"
 
 export ZSH="$HOME/.oh-my-zsh"
@@ -161,12 +192,12 @@ export LANG=en_AU.UTF-8
 export LC_ALL=en_AU.UTF-8
 export EDITOR=nano
 
-# Layer 3 of the title fix: settings.json's "env" key only reliably
-# reaches tool-call subprocesses, not Claude Code's own startup
-# environment, so the title override needs a real shell-level export
-# too. (Confirmed unreliable either way in current Claude Code
-# versions -- the Ghostty `title` fixed-string override above is the
-# layer that actually holds regardless of whether this flag works.)
+# Defense-in-depth alongside the Ghostty `title` lock: settings.json's
+# "env" key alone did not reliably stop the title change when tested
+# directly on this machine (see anthropics/claude-code issues #16572,
+# #21677, #29349), so this shell-level export is added too. Neither
+# is independently sufficient -- the Ghostty-level lock is what
+# actually holds regardless of whether this flag works upstream.
 export CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
 
 # ============================================================
@@ -192,7 +223,7 @@ croot() {
 ZSHRC_EOF
 echo ".zshrc written to $HOME/.zshrc"
 
-# --- Claude settings.json merge (layer 3 of title fix) ---
+# --- Claude settings.json merge (defense-in-depth for title fix) ---
 mkdir -p "$HOME/.claude"
 [[ -f "$HOME/.claude/settings.json" ]] && cp "$HOME/.claude/settings.json" "$BACKUP_DIR/claude-settings.json"
 
@@ -205,8 +236,19 @@ path = Path(sys.argv[1])
 
 data = {}
 if path.exists() and path.stat().st_size:
-    with path.open() as f:
-        data = json.load(f)
+    try:
+        with path.open() as f:
+            loaded = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"WARNING: {path} is not valid JSON ({e}); already backed up, "
+              "starting fresh instead of crashing.", file=sys.stderr)
+        loaded = {}
+    if isinstance(loaded, dict):
+        data = loaded
+    else:
+        print(f"WARNING: {path} top level is a {type(loaded).__name__}, not "
+              "an object; already backed up, starting fresh instead of crashing.",
+              file=sys.stderr)
 
 env = data.setdefault("env", {})
 env["CLAUDE_CODE_DISABLE_TERMINAL_TITLE"] = "1"
@@ -245,6 +287,12 @@ if [[ ! -f "$GHOSTTY_DIR/config.ghostty" ]]; then
   echo "[OK] Ghostty: no competing config.ghostty file"
 else
   echo "[FAIL] Ghostty: config.ghostty still present, will override this config"
+fi
+
+if [[ ! -f "$MACOS_GHOSTTY_DIR/config" && ! -f "$MACOS_GHOSTTY_DIR/config.ghostty" ]]; then
+  echo "[OK] Ghostty: no competing config in Application Support"
+else
+  echo "[FAIL] Ghostty: config still present in Application Support, will override this config"
 fi
 
 if grep -q 'DISABLE_AUTO_TITLE="true"' "$HOME/.zshrc"; then

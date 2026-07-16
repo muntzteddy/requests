@@ -24,9 +24,13 @@
 #   --dry-run              With --apply/--macos/--brew: print actions only, change nothing
 #   -h, --help              Show this help
 #
-# Files handled by --apply (matches upstream bootstrap.sh --exclude list):
+# Files handled by --apply:
 #   everything in the repo except README.md, bootstrap.sh, .macos, LICENSE-MIT.txt,
-#   .git*, brew.sh, .osx — i.e. the actual dotfiles (.zshrc, .gitconfig, .vimrc, etc.)
+#   brew.sh, .osx, .DS_Store, .git, .gitignore, .gitattributes (exact-name matches,
+#   not globs) — i.e. the actual dotfiles (.zshrc, .gitconfig, .vimrc, etc.). This list
+#   is NOT a mirror of upstream bootstrap.sh's own rsync --exclude list -- upstream
+#   never excludes .macos/brew.sh (this wrapper does, deliberately, so those stay
+#   gated behind --macos/--brew) and does exclude .DS_Store.
 
 set -uo pipefail
 
@@ -51,13 +55,19 @@ warn()  { print -P "%F{yellow}[WARN]%f  $*"; }
 err()   { print -P "%F{red}[ERROR]%f $*" >&2; }
 
 usage() {
+  local code="${1:-0}"
   sed -n '2,30p' "$SCRIPT_PATH" | sed 's/^# \{0,1\}//'
-  exit 0
+  exit "$code"
 }
 
 while (( $# )); do
   case "$1" in
-    --stage-dir)    STAGE_DIR="$2"; shift 2 ;;
+    --stage-dir)
+      if (( $# < 2 )); then
+        err "--stage-dir requires a value"
+        usage 1
+      fi
+      STAGE_DIR="$2"; shift 2 ;;
     --diff)         ACTION="diff"; shift ;;
     --apply)        ACTION="apply"; shift ;;
     --restore)      ACTION="restore"; shift ;;
@@ -65,13 +75,14 @@ while (( $# )); do
     --macos)        DO_MACOS=true; shift ;;
     --brew)         DO_BREW=true; shift ;;
     --dry-run)      DRY_RUN=true; shift ;;
-    -h|--help)      usage ;;
-    *) err "Unknown argument: $1"; usage ;;
+    -h|--help)      usage 0 ;;
+    *) err "Unknown argument: $1"; usage 1 ;;
   esac
 done
 
-# Exclusions mirror upstream bootstrap.sh's tarball --exclude list, plus VCS/meta files
-EXCLUDES=(README.md bootstrap.sh .macos LICENSE-MIT.txt brew.sh .osx .git .gitignore .gitattributes)
+# Wrapper-defined exclude list (exact-name matches, not globs -- see header
+# comment). Not a mirror of upstream's own rsync --exclude list.
+EXCLUDES=(README.md bootstrap.sh .macos LICENSE-MIT.txt brew.sh .osx .DS_Store .git .gitignore .gitattributes)
 
 is_excluded() {
   local name="$1"
@@ -82,15 +93,67 @@ is_excluded() {
   return 1
 }
 
+# For a directory, `diff -rq` reports a difference whenever dst has ANY extra
+# file not in src -- which is always true for the merge case (e.g. the
+# user's own scripts alongside merged-in dotfiles in ~/bin), permanently
+# flagging such directories as MODIFIED/changed on every run even when
+# nothing from src actually changed. dir_matches instead checks only that
+# every file src has is present in dst with identical content; extra files
+# in dst are not a mismatch. NOTE: this deliberately does not detect or
+# prune files that a *previous* apply installed from src but upstream has
+# since removed -- auto-deleting files in $HOME based on a heuristic risks
+# deleting a file the user added themselves, which is exactly the kind of
+# surprise this tool exists to avoid. Such staleness is a known, accepted
+# limitation, not a bug this function tries to solve.
+dir_matches() {
+  local s="$1" d="$2" f rel
+  [[ -d "$d" ]] || return 1
+  for f in "${s}"/**/*(N^/D); do
+    rel="${f#"${s}"/}"
+    if [[ -L "$f" ]]; then
+      # Compare symlinks by target path, not content: [[ -e ]] follows
+      # symlinks, so a dangling one (e.g. bin/subl pointing at an app
+      # that isn't installed) would wrongly read as "missing" and cmp
+      # would try to read a target that may not exist.
+      [[ -L "${d}/${rel}" ]] || return 1
+      [[ "$(readlink "$f")" == "$(readlink "${d}/${rel}")" ]] || return 1
+    else
+      [[ -e "${d}/${rel}" ]] || return 1
+      cmp -s "$f" "${d}/${rel}" || return 1
+    fi
+  done
+  return 0
+}
+
+is_unchanged() {
+  local s="$1" d="$2"
+  [[ -e "$d" ]] || return 1
+  if [[ -d "$s" ]]; then
+    dir_matches "$s" "$d"
+  else
+    diff -q "$s" "$d" >/dev/null 2>&1
+  fi
+}
+
 # ---- clone or update staging dir ----
+# refresh=true always fetches (used by --diff, so a review shows current
+# upstream). refresh=false reuses whatever is already staged without
+# fetching (used by --apply) so that content applied is the exact content
+# a prior --diff reviewed, rather than silently re-fetching to whatever
+# upstream has changed to in between the two separate invocations.
 sync_stage() {
+  local refresh="${1:-true}"
   if [[ -d "${STAGE_DIR}/.git" ]]; then
-    info "Updating existing staging clone: ${STAGE_DIR}"
-    git -C "$STAGE_DIR" fetch --quiet origin
-    git -C "$STAGE_DIR" reset --quiet --hard origin/HEAD
+    if [[ "$refresh" == true ]]; then
+      info "Updating existing staging clone: ${STAGE_DIR}"
+      git -C "$STAGE_DIR" fetch --quiet origin || { err "git fetch failed"; exit 1; }
+      git -C "$STAGE_DIR" reset --quiet --hard origin/HEAD || { err "git reset failed"; exit 1; }
+    else
+      info "Using already-staged clone: ${STAGE_DIR} (run --diff first to refresh)"
+    fi
   else
     info "Cloning ${REPO_URL} -> ${STAGE_DIR}"
-    git clone --quiet "$REPO_URL" "$STAGE_DIR"
+    git clone --quiet "$REPO_URL" "$STAGE_DIR" || { err "git clone failed"; exit 1; }
   fi
 }
 
@@ -107,7 +170,7 @@ staged_files() {
 
 # ---- diff ----
 do_diff() {
-  sync_stage
+  sync_stage true
   info "Files that would be installed into \$HOME (upstream bootstrap.sh set, minus excludes):"
   local base changed=0
   for base in $(staged_files); do
@@ -116,7 +179,7 @@ do_diff() {
     if [[ ! -e "$dst" ]]; then
       print -P "  %F{green}NEW%f       ${base}"
       changed=1
-    elif ! diff -rq "$src" "$dst" >/dev/null 2>&1; then
+    elif ! is_unchanged "$src" "$dst"; then
       print -P "  %F{yellow}MODIFIED%f  ${base}"
       changed=1
     else
@@ -135,7 +198,7 @@ do_diff() {
 
 # ---- apply ----
 do_apply() {
-  sync_stage
+  sync_stage false
   local ts backup_dir
   ts="$(date +%Y%m%d-%H%M%S)"
   backup_dir="${BACKUP_ROOT}/${ts}"
@@ -144,7 +207,7 @@ do_apply() {
   for base in $(staged_files); do
     src="${STAGE_DIR}/${base}"
     dst="${HOME}/${base}"
-    if [[ -e "$dst" ]] && diff -rq "$src" "$dst" >/dev/null 2>&1; then
+    if is_unchanged "$src" "$dst"; then
       continue  # identical, nothing to do
     fi
     any=1
@@ -154,9 +217,11 @@ do_apply() {
       continue
     fi
     if [[ -e "$dst" ]]; then
-      mkdir -p "${backup_dir:h}/${base:h}" 2>/dev/null
       mkdir -p "$backup_dir"
-      cp -R "$dst" "${backup_dir}/${base}"
+      if ! cp -R "$dst" "${backup_dir}/${base}"; then
+        err "Backup of ${dst} failed -- skipping install of ${base}"
+        continue
+      fi
     fi
     # When src is a directory and dst already exists as one (e.g. a
     # pre-existing ~/bin with the user's own scripts), plain `cp -R src
@@ -164,11 +229,18 @@ do_apply() {
     # the trailing-/. form in that case; every other case (dst absent,
     # or src a plain file) is already handled correctly by cp -R alone.
     if [[ -d "$src" && -d "$dst" ]]; then
-      cp -R "$src"/. "$dst"/
+      if cp -R "$src"/. "$dst"/; then
+        ok "Installed ${base}"
+      else
+        err "Failed to install ${base} (merge into ${dst})"
+      fi
     else
-      cp -R "$src" "$dst"
+      if cp -R "$src" "$dst"; then
+        ok "Installed ${base}"
+      else
+        err "Failed to install ${base}"
+      fi
     fi
-    ok "Installed ${base}"
   done
 
   if (( ! any )); then
@@ -193,7 +265,9 @@ run_macos() {
     err ".macos not found in staged repo — skipping"
     return 1
   fi
-  warn ".macos rewrites ~300 hidden macOS system preferences (Finder, Dock, Safari, screenshots, etc.)."
+  warn ".macos rewrites ~300 hidden macOS system preferences (Finder, Dock, Safari, screenshots, etc.),"
+  warn "using sudo to write system-wide settings outside \$HOME (/Library/Preferences, NVRAM, pmset)."
+  warn "--restore only undoes \$HOME dotfiles -- it CANNOT undo anything .macos changes via sudo."
   warn "Review it first: less \"${macos_script}\""
   if $DRY_RUN; then
     info "[dry-run] Would run: ${macos_script}"
@@ -216,7 +290,8 @@ run_brew() {
     err "brew.sh not found in staged repo — skipping"
     return 1
   fi
-  warn "brew.sh installs Homebrew (if absent) and a large, opinionated package/cask list."
+  warn "brew.sh assumes Homebrew is ALREADY installed (it does not bootstrap it) and runs"
+  warn "brew update/upgrade plus a large, opinionated package/cask install list."
   warn "Review it first: less \"${brew_script}\""
   if $DRY_RUN; then
     info "[dry-run] Would run: ${brew_script}"
@@ -246,15 +321,21 @@ do_restore() {
   fi
   local dir="${latest_dirs[1]}"
   info "Restoring from ${dir}"
+  # (N^/D): every non-directory leaf, including symlinks -- the plain-files-
+  # only `.` qualifier used here previously silently skipped symlinked
+  # dotfiles (e.g. bin/subl) during restore with no error or warning.
   local f rel
-  for f in "${dir}"/**/*(N.D); do
+  for f in "${dir}"/**/*(N^/D); do
     rel="${f#"${dir}"/}"
     if $DRY_RUN; then
       info "[dry-run] Would restore ${rel} -> ${HOME}/${rel}"
     else
       mkdir -p "${HOME}/${rel:h}"
-      cp -R "$f" "${HOME}/${rel}"
-      ok "Restored ${rel}"
+      if cp -R "$f" "${HOME}/${rel}"; then
+        ok "Restored ${rel}"
+      else
+        err "Failed to restore ${rel}"
+      fi
     fi
   done
 }

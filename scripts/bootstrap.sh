@@ -2,6 +2,21 @@
 set -euo pipefail
 
 ROOT="${PROJECT_ROOT:-${HOME}/work/project}"
+
+# Every write below is an unconditional `cat > file` with no backup -- safe
+# only because ROOT used to be a fixed, bootstrap-owned scratch directory.
+# Now that it's configurable via PROJECT_ROOT, guard against silently
+# clobbering an existing project: if it already has content, require the
+# caller to point elsewhere or clear it out first (rather than adding
+# backup logic to what's meant to be a fresh-scaffold script).
+if [[ -d "${ROOT}" ]] && [[ -n "$(ls -A "${ROOT}" 2>/dev/null)" ]]; then
+  echo "ERROR: ${ROOT} already exists and is not empty." >&2
+  echo "This script unconditionally overwrites CLAUDE.md, progress.md," >&2
+  echo "session_summary.md, .mcp.json, .claude/settings*.json, and .gitignore" >&2
+  echo "with no backup. Point PROJECT_ROOT elsewhere or empty this directory first." >&2
+  exit 1
+fi
+
 mkdir -p "${ROOT}"/{.claude,notes,scripts}
 cd "${ROOT}"
 
