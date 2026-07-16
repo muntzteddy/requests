@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${HOME}/work/project"
+ROOT="${PROJECT_ROOT:-${HOME}/work/project}"
 mkdir -p "${ROOT}"/{.claude,notes,scripts}
 cd "${ROOT}"
 
