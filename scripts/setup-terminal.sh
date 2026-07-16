@@ -74,6 +74,11 @@ export LANG=en_AU.UTF-8
 export LC_ALL=en_AU.UTF-8
 export EDITOR=nano
 
+# Layer 2b of the title fix: settings.json's "env" key only reliably
+# reaches tool-call subprocesses, not Claude Code's own startup
+# environment, so the title override needs a real shell-level export too.
+export CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
+
 # ============================================================
 # 4. Aliases
 # ============================================================
@@ -144,6 +149,12 @@ if grep -q 'DISABLE_AUTO_TITLE="true"' "$HOME/.zshrc"; then
   echo "[OK] Zsh: DISABLE_AUTO_TITLE set"
 else
   echo "[FAIL] Zsh: DISABLE_AUTO_TITLE missing"
+fi
+
+if grep -q '^export CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1$' "$HOME/.zshrc"; then
+  echo "[OK] Zsh: CLAUDE_CODE_DISABLE_TERMINAL_TITLE exported"
+else
+  echo "[FAIL] Zsh: CLAUDE_CODE_DISABLE_TERMINAL_TITLE export missing"
 fi
 
 if python3 -c '
